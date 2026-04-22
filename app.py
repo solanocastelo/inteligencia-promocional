@@ -53,11 +53,12 @@ st.markdown("<p style='text-align:center;color:#777;font-size:0.9rem;'>Análise 
 with st.sidebar:
     st.markdown("<h2 style='color:#4285f4;font-size:1.2rem;'>Fonte de Dados</h2>", unsafe_allow_html=True)
     fonte = st.radio("Carregar de:", ["Google Drive", "Upload de arquivos"], horizontal=True)
-uploads = None
-if fonte == "Upload de arquivos":
-    uploads = st.file_uploader("Selecione os .xlsx", type=["xlsx"], accept_multiple_files=True)
-st.divider()
+    uploads = None
+    if fonte == "Upload de arquivos":
+        uploads = st.file_uploader("Selecione os .xlsx", type=["xlsx"], accept_multiple_files=True)
+    st.divider()
     st.caption("© 2026 · Casa Freitas")
+
 
 # ── Carregamento ──────────────────────────────────────────────────────────────
 with st.spinner("Carregando dados..."):
