@@ -7,7 +7,7 @@ import streamlit as st
 
 from analytics import alertas_estoque, calcular_abc, prever_proximos_meses, simular_metas
 from charts import LAYOUT_BASE, area_temporal, barras_horizontais, gauge_meta, pareto_abc, yoy_multilinhas
-from loader import MESES_ORDEM, carregar_pasta, carregar_uploads
+from loader import MESES_ORDEM, carregar_pasta, carregar_uploads, carregar_google_drive
 
 st.set_page_config(page_title="Inteligência Promocional Casa Freitas",
                    layout="wide", initial_sidebar_state="expanded")
@@ -52,20 +52,21 @@ st.markdown("<p style='text-align:center;color:#777;font-size:0.9rem;'>Análise 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("<h2 style='color:#4285f4;font-size:1.2rem;'>Fonte de Dados</h2>", unsafe_allow_html=True)
-    fonte = st.radio("Carregar de:", ["Pasta 'dados/'", "Upload de arquivos"], horizontal=True)
-    uploads = None
-    if fonte == "Upload de arquivos":
-        uploads = st.file_uploader("Selecione os .xlsx", type=["xlsx"], accept_multiple_files=True)
-    st.divider()
+    fonte = st.radio("Carregar de:", ["Google Drive", "Upload de arquivos"], horizontal=True)
+uploads = None
+if fonte == "Upload de arquivos":
+    uploads = st.file_uploader("Selecione os .xlsx", type=["xlsx"], accept_multiple_files=True)
+st.divider()
     st.caption("© 2026 · Casa Freitas")
 
 # ── Carregamento ──────────────────────────────────────────────────────────────
 with st.spinner("Carregando dados..."):
-    PASTA_DADOS = "/home/solano/Documentos/Inteligencia_Promocional/dados"
-    if fonte == "Upload de arquivos":
-        df_raw = carregar_uploads(uploads) if uploads else pd.DataFrame()
-    else:
-        df_raw = carregar_pasta(PASTA_DADOS)
+    GDRIVE_FOLDER_ID = "1Ebf46TXLIkRv9TI9xhWAEPzWwjVWdfN0"
+if fonte == "Upload de arquivos":
+    df_raw = carregar_uploads(uploads) if uploads else pd.DataFrame()
+else:
+    df_raw = carregar_google_drive(GDRIVE_FOLDER_ID)
+
 
 if df_raw.empty:
     st.info("Nenhum dado carregado. Use o upload ou verifique a pasta de dados.")

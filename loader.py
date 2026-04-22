@@ -90,3 +90,17 @@ def _pos_processar(df):
         df["MêsNum"] = df["Mês"].map(MESES_NUM).fillna(0).astype(int)
         df["Período"] = df["Ano"].astype(str) + "-" + df["MêsNum"].astype(str).str.zfill(2)
     return df
+@st.cache_data(show_spinner=False, ttl=3600)
+
+def carregar_google_drive(folder_id: str) -> pd.DataFrame:
+    try:
+        import gdown, tempfile
+        tmp_dir = tempfile.mkdtemp()
+        gdown.download_folder(
+            f"https://drive.google.com/drive/folders/{folder_id}",
+            output=tmp_dir, quiet=True, use_cookies=False
+        )
+        return carregar_pasta(tmp_dir)
+    except Exception as e:
+        st.error(f"Erro ao carregar do Google Drive: {e}")
+        return pd.DataFrame()
