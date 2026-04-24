@@ -1,5 +1,6 @@
 import io
 import math
+import re
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -299,29 +300,29 @@ with tab_alerta:
 
 with tab_encarte:
     st.header("Sugestão de Encarte")
-    st.caption("Score composto: 70% volume de vendas + 30% crescimento YoY. Capa com diversidade de categorias.")
+    st.caption("Capa mista com os produtos mais importantes. Páginas internas organizadas por subcategoria.")
 
-    ce1, ce2, ce3, ce4 = st.columns(4, gap="medium")
+    ce1, ce2, ce3 = st.columns(3, gap="medium")
     mes_enc = ce1.selectbox("Mês de Referência", options=meses_disp, key="mes_enc")
     anos_enc = ce2.multiselect("Ano(s)", options=anos_disp,
                                default=[anos_disp[-1]] if anos_disp else [], key="anos_enc")
     n_pags = ce3.selectbox("Páginas do Encarte", options=[4, 8, 12, 16], key="n_pags")
-    org_por = ce4.radio("Organizar por", ["Subcategoria","Categoria"], horizontal=True, key="org_enc")
 
     filtrar_est = st.checkbox("Excluir produtos sem estoque", value=True, key="filtrar_est_enc")
     st.divider()
 
     if mes_enc:
-        res_enc = sugerir_encarte(df_raw, mes_enc, anos_enc, n_pags, org_por, filtrar_est)
+        res_enc = sugerir_encarte(df_raw, mes_enc, anos_enc, n_pags, filtrar_sem_estoque=filtrar_est)
 
         if not res_enc:
             st.info(f"Sem dados para {mes_enc}.")
         else:
             ke1,ke2,ke3,ke4 = st.columns(4, gap="medium")
+            n_subcats_enc = res_enc['paginas']['Página'].nunique() if not res_enc['paginas'].empty else 0
             ke1.metric("Páginas", str(n_pags))
             ke2.metric("Total de Produtos", str(res_enc['total_produtos']))
-            ke3.metric("Capa", "9 produtos")
-            ke4.metric("Páginas Internas", f"{n_pags-1} × 12 produtos")
+            ke3.metric("Capa", "9 produtos · mista")
+            ke4.metric("Páginas Internas", f"{n_subcats_enc} subcategorias")
             st.divider()
 
             st.subheader("🏷️ Capa — 9 Produtos Destaque")
@@ -341,7 +342,7 @@ with tab_encarte:
                 for pag in res_enc['paginas']['Página'].unique():
                     df_p = res_enc['paginas'][res_enc['paginas']['Página'] == pag]
                     df_p = df_p[[c for c in cols_show if c in df_p.columns]]
-                    with st.expander(f"📄 {pag} — {len(df_p)} produtos", expanded=(pag=='Página 2')):
+                    with st.expander(f"📄 {pag} — {len(df_p)} produtos", expanded=(pag == res_enc['paginas']['Página'].iloc[0])):
                         st.dataframe(
                             df_p.style.format({
                                 'Preço Médio':'R$ {:,.2f}','Quantidade':'{:,.0f}',
@@ -368,14 +369,19 @@ with tab_encarte:
                     res['resumo'].to_excel(writer, sheet_name='Resumo', index=False)
                     res['capa'][cols_exp].to_excel(writer, sheet_name='Capa', index=False)
                     if not res['paginas'].empty:
+                        seen_sheets = set()
                         for pag in res['paginas']['Página'].unique():
                             df_p = res['paginas'][res['paginas']['Página'] == pag][cols_exp]
-                            df_p.to_excel(writer, sheet_name=pag.replace('Página ','Pag_')[:31], index=False)
+                            safe = re.sub(r'[\\/*?:\[\]]', '', pag)[:31]
+                            if safe in seen_sheets:
+                                safe = safe[:28] + '_2'
+                            seen_sheets.add(safe)
+                            df_p.to_excel(writer, sheet_name=safe, index=False)
                 return buf.getvalue()
 
             st.download_button(
                 "⬇️ Exportar Sugestão de Encarte (Excel)",
-                data=gerar_excel_encarte(res_enc, org_por),
+                data=gerar_excel_encarte(res_enc, None),
                 file_name=f"encarte_{mes_enc}_{n_pags}pags.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
