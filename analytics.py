@@ -113,6 +113,7 @@ def alertas_estoque(df, meses_cobertura=2.0):
     )
     alerta = merged[merged["Meses de Cobertura"] < meses_cobertura].sort_values("Meses de Cobertura").reset_index(drop=True)
     return alerta[["Código","Produto","Saldo","Média Mensal (Un)","Meses de Cobertura","Status"]]
+
 def sugerir_encarte(df, mes_ref, anos_ref, n_paginas, organizar_por='Subcategoria', filtrar_sem_estoque=True):
     PROD_CAPA = 9
     PROD_PAG = 12
