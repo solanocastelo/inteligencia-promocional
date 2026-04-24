@@ -5,7 +5,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from analytics import alertas_estoque, calcular_abc, prever_proximos_meses, simular_metas
+from analytics import alertas_estoque, calcular_abc, prever_proximos_meses, simular_metas, sugerir_encarte
 from charts import LAYOUT_BASE, area_temporal, barras_horizontais, gauge_meta, pareto_abc, yoy_multilinhas
 from loader import MESES_ORDEM, carregar_pasta, carregar_uploads, carregar_google_drive
 
@@ -174,9 +174,9 @@ with col_yoy:
 st.divider()
 
 # ── Abas ──────────────────────────────────────────────────────────────────────
-tab_rank, tab_curva, tab_sim, tab_abc, tab_prev, tab_alerta = st.tabs([
+tab_rank, tab_curva, tab_sim, tab_abc, tab_prev, tab_alerta, tab_encarte = st.tabs([
     "📊 Ranking do Mês","📈 Curva A","🎯 Simulador de Metas",
-    "🔺 Curva ABC","🔮 Previsão","⚠️ Alertas de Estoque"
+    "🔺 Curva ABC","🔮 Previsão","⚠️ Alertas de Estoque","📋 Sugestão de Encarte"
 ])
 
 with tab_rank:
@@ -296,3 +296,86 @@ with tab_alerta:
         st.divider()
         st.dataframe(alertas.style.format({"Saldo":"{:,.0f}","Média Mensal (Un)":"{:,.1f}","Meses de Cobertura":"{:.1f}"}), use_container_width=True, hide_index=True, height=450)
         st.download_button("⬇ Exportar Alertas", data=df_para_excel(alertas), file_name="alertas_estoque.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+with tab_encarte:
+    st.header("Sugestão de Encarte")
+    st.caption("Score composto: 70% volume de vendas + 30% crescimento YoY. Capa com diversidade de categorias.")
+
+    ce1, ce2, ce3, ce4 = st.columns(4, gap="medium")
+    mes_enc = ce1.selectbox("Mês de Referência", options=meses_disp, key="mes_enc")
+    anos_enc = ce2.multiselect("Ano(s)", options=anos_disp,
+                               default=[anos_disp[-1]] if anos_disp else [], key="anos_enc")
+    n_pags = ce3.selectbox("Páginas do Encarte", options=[4, 8, 12, 16], key="n_pags")
+    org_por = ce4.radio("Organizar por", ["Subcategoria","Categoria"], horizontal=True, key="org_enc")
+
+    filtrar_est = st.checkbox("Excluir produtos sem estoque", value=True, key="filtrar_est_enc")
+    st.divider()
+
+    if mes_enc:
+        res_enc = sugerir_encarte(df_raw, mes_enc, anos_enc, n_pags, org_por, filtrar_est)
+
+        if not res_enc:
+            st.info(f"Sem dados para {mes_enc}.")
+        else:
+            ke1,ke2,ke3,ke4 = st.columns(4, gap="medium")
+            ke1.metric("Páginas", str(n_pags))
+            ke2.metric("Total de Produtos", str(res_enc['total_produtos']))
+            ke3.metric("Capa", "9 produtos")
+            ke4.metric("Páginas Internas", f"{n_pags-1} × 12 produtos")
+            st.divider()
+
+            st.subheader("🏷️ Capa — 9 Produtos Destaque")
+            cols_show = [c for c in ['Posição','Código','Produto','Categoria','Subcategoria',
+                                      'Preço Médio','Quantidade','Crescimento YoY (%)','Classe']
+                         if c in res_enc['capa'].columns]
+            st.dataframe(
+                res_enc['capa'][cols_show].style.format({
+                    'Preço Médio':'R$ {:,.2f}','Quantidade':'{:,.0f}',
+                    'Crescimento YoY (%)':'{:+.1f}%'
+                }), use_container_width=True, hide_index=True
+            )
+            st.divider()
+
+            st.subheader(f"📄 Páginas Internas")
+            if not res_enc['paginas'].empty:
+                for pag in res_enc['paginas']['Página'].unique():
+                    df_p = res_enc['paginas'][res_enc['paginas']['Página'] == pag]
+                    df_p = df_p[[c for c in cols_show if c in df_p.columns]]
+                    with st.expander(f"📄 {pag} — {len(df_p)} produtos", expanded=(pag=='Página 2')):
+                        st.dataframe(
+                            df_p.style.format({
+                                'Preço Médio':'R$ {:,.2f}','Quantidade':'{:,.0f}',
+                                'Crescimento YoY (%)':'{:+.1f}%'
+                            }), use_container_width=True, hide_index=True
+                        )
+            st.divider()
+
+            st.subheader("📊 Resumo por Página")
+            st.dataframe(
+                res_enc['resumo'].style.format({'Venda_Ref':'R$ {:,.2f}'}),
+                use_container_width=True, hide_index=True
+            )
+            st.divider()
+
+            def gerar_excel_encarte(res, org):
+                cols_exp = [c for c in ['Página','Posição','Código','Produto','Categoria',
+                                         'Subcategoria','Preço Médio','Quantidade',
+                                         'Crescimento YoY (%)','Classe']
+                            if c in res['completo'].columns]
+                buf = io.BytesIO()
+                with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
+                    res['completo'][cols_exp].to_excel(writer, sheet_name='Encarte Completo', index=False)
+                    res['resumo'].to_excel(writer, sheet_name='Resumo', index=False)
+                    res['capa'][cols_exp].to_excel(writer, sheet_name='Capa', index=False)
+                    if not res['paginas'].empty:
+                        for pag in res['paginas']['Página'].unique():
+                            df_p = res['paginas'][res['paginas']['Página'] == pag][cols_exp]
+                            df_p.to_excel(writer, sheet_name=pag.replace('Página ','Pag_')[:31], index=False)
+                return buf.getvalue()
+
+            st.download_button(
+                "⬇️ Exportar Sugestão de Encarte (Excel)",
+                data=gerar_excel_encarte(res_enc, org_por),
+                file_name=f"encarte_{mes_enc}_{n_pags}pags.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
