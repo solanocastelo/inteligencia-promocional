@@ -300,7 +300,7 @@ with tab_alerta:
 
 with tab_encarte:
     st.header("Sugestão de Encarte")
-    st.caption("Score: 70% volume de vendas + 30% crescimento YoY. Hierarquia: Departamento → 2 Categorias → 6 Subcategorias por página.")
+    st.caption("Score: 70% volume de vendas + 30% crescimento YoY. Hierarquia: Departamento → Categoria → Subcategoria → 3 Produtos · 12 por página.")
 
     ce1, ce2, ce3 = st.columns(3, gap="medium")
     mes_enc = ce1.selectbox("Mês de Referência", options=meses_disp, key="mes_enc")
@@ -319,7 +319,7 @@ with tab_encarte:
     if usar_meta_enc and meta_anual_enc > 0 and meta_mensal_enc == 0:
         st.caption(f"Meta mensal calculada automaticamente: **R$ {meta_anual_enc/12:,.2f}** (anual ÷ 12)")
 
-    filtrar_est = st.checkbox("Excluir subcategorias sem estoque", value=True, key="filtrar_est_enc")
+    filtrar_est = st.checkbox("Excluir produtos sem estoque", value=True, key="filtrar_est_enc")
     st.divider()
 
     if mes_enc:
@@ -335,8 +335,8 @@ with tab_encarte:
 
             ke1, ke2, ke3, ke4 = st.columns(4, gap="medium")
             ke1.metric("Páginas", str(n_pags))
-            ke2.metric("Total Subcategorias", str(res_enc['total_itens']))
-            ke3.metric("Capa", "9 subcategorias · mista")
+            ke2.metric("Total de Produtos", str(res_enc['total_itens']))
+            ke3.metric("Capa", "9 produtos · mista")
             ke4.metric("Organização", nivel_pag_enc)
             if meta_param:
                 km1, km2 = st.columns(2, gap="medium")
@@ -344,22 +344,23 @@ with tab_encarte:
                 km2.metric("Meta Anual", f"R$ {meta_anual_enc:,.2f}" if meta_anual_enc > 0 else "—")
             st.divider()
 
-            base_cols = (["Departamento"] if tem_dep_enc else []) + \
-                        ["Categoria", "Subcategoria", "Venda", "Quantidade",
-                         "Ticket Médio", "Crescimento YoY (%)", "Classe"]
-            if meta_param:
-                base_cols += ["Meta Est. (R$)", "Qtd. Necessária"]
-                if "Estoque OK?" in res_enc['capa'].columns:
-                    base_cols += ["Estoque OK?"]
-
             fmt_enc = {
                 "Venda": "R$ {:,.2f}", "Ticket Médio": "R$ {:,.2f}",
                 "Meta Est. (R$)": "R$ {:,.2f}", "Quantidade": "{:,.0f}",
                 "Qtd. Necessária": "{:,.0f}", "Crescimento YoY (%)": "{:+.1f}%"
             }
 
-            capa_cols = ["Posição"] + [c for c in base_cols if c in res_enc['capa'].columns]
-            st.subheader("🏷️ Capa — 9 Subcategorias Destaque")
+            # Colunas para exibição da capa (lista plana)
+            capa_cols = [c for c in (
+                ["Posição"] +
+                (["Departamento"] if tem_dep_enc else []) +
+                ["Categoria", "Subcategoria"] +
+                ([c2 for c2 in ["Código"] if c2 in res_enc['capa'].columns]) +
+                ["Produto", "Venda", "Quantidade", "Ticket Médio", "Crescimento YoY (%)", "Classe"] +
+                (["Meta Est. (R$)", "Qtd. Necessária"] + (["Estoque OK?"] if "Estoque OK?" in res_enc['capa'].columns else []) if meta_param else [])
+            ) if c in res_enc['capa'].columns]
+
+            st.subheader("🏷️ Capa — 9 Produtos Destaque")
             st.dataframe(
                 res_enc['capa'][capa_cols].style.format(
                     {k: v for k, v in fmt_enc.items() if k in capa_cols}
@@ -367,26 +368,46 @@ with tab_encarte:
             )
             st.divider()
 
+            # Colunas para exibição dentro de cada subcat (sem Cat/SubCat pois viram títulos)
+            prod_detail_cols = [c for c in (
+                ([c2 for c2 in ["Código"] if c2 in res_enc['paginas'].columns]) +
+                ["Produto", "Venda", "Quantidade", "Ticket Médio", "Crescimento YoY (%)", "Classe"] +
+                (["Meta Est. (R$)", "Qtd. Necessária"] + (["Estoque OK?"] if "Estoque OK?" in res_enc['paginas'].columns else []) if meta_param else [])
+            ) if c in (res_enc['paginas'].columns if not res_enc['paginas'].empty else [])]
+
             st.subheader(f"📄 Páginas Internas — por {nivel_pag_enc}")
             if not res_enc['paginas'].empty:
                 pags_unicas = res_enc['paginas']['Página'].unique()
                 first_pag = pags_unicas[0] if len(pags_unicas) > 0 else None
-                pag_cols = [c for c in base_cols if c in res_enc['paginas'].columns]
                 for pag in pags_unicas:
                     df_p = res_enc['paginas'][res_enc['paginas']['Página'] == pag]
-                    with st.expander(f"📄 {pag} — {len(df_p)} subcategorias", expanded=(pag == first_pag)):
-                        if tem_dep_enc and 'Categoria' in df_p.columns:
+                    with st.expander(f"📄 {pag} — {len(df_p)} produtos", expanded=(pag == first_pag)):
+                        if 'Categoria' in df_p.columns:
                             for cat in df_p['Categoria'].unique():
-                                df_cat = df_p[df_p['Categoria'] == cat][[c for c in pag_cols if c in df_p.columns]]
+                                df_cat = df_p[df_p['Categoria'] == cat]
                                 st.markdown(f"**{cat}**")
-                                st.dataframe(
-                                    df_cat.style.format({k: v for k, v in fmt_enc.items() if k in df_cat.columns}),
-                                    use_container_width=True, hide_index=True
-                                )
+                                if 'Subcategoria' in df_cat.columns:
+                                    for subcat in df_cat['Subcategoria'].unique():
+                                        df_sub = df_cat[df_cat['Subcategoria'] == subcat]
+                                        show = [c for c in prod_detail_cols if c in df_sub.columns]
+                                        st.caption(f"↳ {subcat}")
+                                        st.dataframe(
+                                            df_sub[show].style.format(
+                                                {k: v for k, v in fmt_enc.items() if k in show}
+                                            ), use_container_width=True, hide_index=True
+                                        )
+                                else:
+                                    show = [c for c in prod_detail_cols if c in df_cat.columns]
+                                    st.dataframe(
+                                        df_cat[show].style.format(
+                                            {k: v for k, v in fmt_enc.items() if k in show}
+                                        ), use_container_width=True, hide_index=True
+                                    )
                         else:
+                            show = [c for c in prod_detail_cols if c in df_p.columns]
                             st.dataframe(
-                                df_p[[c for c in pag_cols if c in df_p.columns]].style.format(
-                                    {k: v for k, v in fmt_enc.items() if k in df_p.columns}
+                                df_p[show].style.format(
+                                    {k: v for k, v in fmt_enc.items() if k in show}
                                 ), use_container_width=True, hide_index=True
                             )
             st.divider()
@@ -402,11 +423,14 @@ with tab_encarte:
                 import re as _re
                 extra = [c for c in ["Meta Est. (R$)", "Qtd. Necessária", "Estoque OK?"]
                          if c in res['completo'].columns]
-                cols_exp = (["Página", "Posição"] +
-                            (["Departamento"] if res.get('tem_dep') else []) +
-                            [c for c in ["Categoria", "Subcategoria", "Venda", "Quantidade",
-                                         "Ticket Médio", "Crescimento YoY (%)", "Classe"] + extra
-                             if c in res['completo'].columns])
+                cols_exp = [c for c in (
+                    ["Página", "Posição"] +
+                    (["Departamento"] if res.get('tem_dep') else []) +
+                    ["Categoria", "Subcategoria"] +
+                    ([c2 for c2 in ["Código"] if c2 in res['completo'].columns]) +
+                    ["Produto", "Venda", "Quantidade", "Ticket Médio",
+                     "Crescimento YoY (%)", "Classe"] + extra
+                ) if c in res['completo'].columns]
                 buf = io.BytesIO()
                 with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
                     res['completo'][cols_exp].to_excel(writer, sheet_name='Encarte Completo', index=False)
