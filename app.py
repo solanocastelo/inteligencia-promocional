@@ -300,7 +300,7 @@ with tab_alerta:
 
 with tab_encarte:
     st.header("Sugestão de Encarte")
-    st.caption("Capa mista com os produtos mais importantes. Páginas internas organizadas por subcategoria.")
+    st.caption("Score: 70% volume de vendas + 30% crescimento YoY. Hierarquia: Departamento → 2 Categorias → 6 Subcategorias por página.")
 
     ce1, ce2, ce3 = st.columns(3, gap="medium")
     mes_enc = ce1.selectbox("Mês de Referência", options=meses_disp, key="mes_enc")
@@ -308,80 +308,122 @@ with tab_encarte:
                                default=[anos_disp[-1]] if anos_disp else [], key="anos_enc")
     n_pags = ce3.selectbox("Páginas do Encarte", options=[4, 8, 12, 16], key="n_pags")
 
-    filtrar_est = st.checkbox("Excluir produtos sem estoque", value=True, key="filtrar_est_enc")
+    ma1, ma2, ma3 = st.columns(3, gap="medium")
+    meta_anual_enc = ma1.number_input("Meta Anual (R$)", min_value=0.0, value=0.0,
+                                      step=100_000.0, format="%.2f", key="meta_anual_enc")
+    meta_mensal_enc = ma2.number_input("Meta do Mês (R$)", min_value=0.0, value=0.0,
+                                       step=10_000.0, format="%.2f", key="meta_mensal_enc")
+    usar_meta_enc = ma3.checkbox("Calcular qtd. sobre a meta", value=False, key="usar_meta_enc")
+
+    meta_efetiva_enc = meta_mensal_enc if meta_mensal_enc > 0 else (meta_anual_enc / 12 if meta_anual_enc > 0 else 0)
+    if usar_meta_enc and meta_anual_enc > 0 and meta_mensal_enc == 0:
+        st.caption(f"Meta mensal calculada automaticamente: **R$ {meta_anual_enc/12:,.2f}** (anual ÷ 12)")
+
+    filtrar_est = st.checkbox("Excluir subcategorias sem estoque", value=True, key="filtrar_est_enc")
     st.divider()
 
     if mes_enc:
-        res_enc = sugerir_encarte(df_raw, mes_enc, anos_enc, n_pags, filtrar_sem_estoque=filtrar_est)
+        meta_param = meta_efetiva_enc if usar_meta_enc and meta_efetiva_enc > 0 else None
+        res_enc = sugerir_encarte(df_raw, mes_enc, anos_enc, n_pags,
+                                  filtrar_sem_estoque=filtrar_est, meta_mensal=meta_param)
 
         if not res_enc:
             st.info(f"Sem dados para {mes_enc}.")
         else:
-            ke1,ke2,ke3,ke4 = st.columns(4, gap="medium")
-            n_subcats_enc = res_enc['paginas']['Página'].nunique() if not res_enc['paginas'].empty else 0
+            tem_dep_enc = res_enc.get('tem_dep', False)
+            nivel_pag_enc = res_enc.get('nivel_pag', 'Categoria')
+
+            ke1, ke2, ke3, ke4 = st.columns(4, gap="medium")
             ke1.metric("Páginas", str(n_pags))
-            ke2.metric("Total de Produtos", str(res_enc['total_produtos']))
-            ke3.metric("Capa", "9 produtos · mista")
-            ke4.metric("Páginas Internas", f"{n_subcats_enc} subcategorias")
+            ke2.metric("Total Subcategorias", str(res_enc['total_itens']))
+            ke3.metric("Capa", "9 subcategorias · mista")
+            ke4.metric("Organização", nivel_pag_enc)
+            if meta_param:
+                km1, km2 = st.columns(2, gap="medium")
+                km1.metric("Meta do Mês", f"R$ {meta_param:,.2f}")
+                km2.metric("Meta Anual", f"R$ {meta_anual_enc:,.2f}" if meta_anual_enc > 0 else "—")
             st.divider()
 
-            st.subheader("🏷️ Capa — 9 Produtos Destaque")
-            cols_show = [c for c in ['Posição','Código','Produto','Categoria','Subcategoria',
-                                      'Preço Médio','Quantidade','Crescimento YoY (%)','Classe']
-                         if c in res_enc['capa'].columns]
+            base_cols = (["Departamento"] if tem_dep_enc else []) + \
+                        ["Categoria", "Subcategoria", "Venda", "Quantidade",
+                         "Ticket Médio", "Crescimento YoY (%)", "Classe"]
+            if meta_param:
+                base_cols += ["Meta Est. (R$)", "Qtd. Necessária"]
+                if "Estoque OK?" in res_enc['capa'].columns:
+                    base_cols += ["Estoque OK?"]
+
+            fmt_enc = {
+                "Venda": "R$ {:,.2f}", "Ticket Médio": "R$ {:,.2f}",
+                "Meta Est. (R$)": "R$ {:,.2f}", "Quantidade": "{:,.0f}",
+                "Qtd. Necessária": "{:,.0f}", "Crescimento YoY (%)": "{:+.1f}%"
+            }
+
+            capa_cols = ["Posição"] + [c for c in base_cols if c in res_enc['capa'].columns]
+            st.subheader("🏷️ Capa — 9 Subcategorias Destaque")
             st.dataframe(
-                res_enc['capa'][cols_show].style.format({
-                    'Preço Médio':'R$ {:,.2f}','Quantidade':'{:,.0f}',
-                    'Crescimento YoY (%)':'{:+.1f}%'
-                }), use_container_width=True, hide_index=True
+                res_enc['capa'][capa_cols].style.format(
+                    {k: v for k, v in fmt_enc.items() if k in capa_cols}
+                ), use_container_width=True, hide_index=True
             )
             st.divider()
 
-            st.subheader(f"📄 Páginas Internas")
+            st.subheader(f"📄 Páginas Internas — por {nivel_pag_enc}")
             if not res_enc['paginas'].empty:
-                for pag in res_enc['paginas']['Página'].unique():
+                pags_unicas = res_enc['paginas']['Página'].unique()
+                first_pag = pags_unicas[0] if len(pags_unicas) > 0 else None
+                pag_cols = [c for c in base_cols if c in res_enc['paginas'].columns]
+                for pag in pags_unicas:
                     df_p = res_enc['paginas'][res_enc['paginas']['Página'] == pag]
-                    df_p = df_p[[c for c in cols_show if c in df_p.columns]]
-                    with st.expander(f"📄 {pag} — {len(df_p)} produtos", expanded=(pag == res_enc['paginas']['Página'].iloc[0])):
-                        st.dataframe(
-                            df_p.style.format({
-                                'Preço Médio':'R$ {:,.2f}','Quantidade':'{:,.0f}',
-                                'Crescimento YoY (%)':'{:+.1f}%'
-                            }), use_container_width=True, hide_index=True
-                        )
+                    with st.expander(f"📄 {pag} — {len(df_p)} subcategorias", expanded=(pag == first_pag)):
+                        if tem_dep_enc and 'Categoria' in df_p.columns:
+                            for cat in df_p['Categoria'].unique():
+                                df_cat = df_p[df_p['Categoria'] == cat][[c for c in pag_cols if c in df_p.columns]]
+                                st.markdown(f"**{cat}**")
+                                st.dataframe(
+                                    df_cat.style.format({k: v for k, v in fmt_enc.items() if k in df_cat.columns}),
+                                    use_container_width=True, hide_index=True
+                                )
+                        else:
+                            st.dataframe(
+                                df_p[[c for c in pag_cols if c in df_p.columns]].style.format(
+                                    {k: v for k, v in fmt_enc.items() if k in df_p.columns}
+                                ), use_container_width=True, hide_index=True
+                            )
             st.divider()
 
             st.subheader("📊 Resumo por Página")
             st.dataframe(
-                res_enc['resumo'].style.format({'Venda_Ref':'R$ {:,.2f}'}),
+                res_enc['resumo'].style.format({"Venda_Ref": "R$ {:,.2f}"}),
                 use_container_width=True, hide_index=True
             )
             st.divider()
 
-            def gerar_excel_encarte(res, org):
-                cols_exp = [c for c in ['Página','Posição','Código','Produto','Categoria',
-                                         'Subcategoria','Preço Médio','Quantidade',
-                                         'Crescimento YoY (%)','Classe']
-                            if c in res['completo'].columns]
+            def gerar_excel_encarte(res):
+                import re as _re
+                extra = [c for c in ["Meta Est. (R$)", "Qtd. Necessária", "Estoque OK?"]
+                         if c in res['completo'].columns]
+                cols_exp = (["Página", "Posição"] +
+                            (["Departamento"] if res.get('tem_dep') else []) +
+                            [c for c in ["Categoria", "Subcategoria", "Venda", "Quantidade",
+                                         "Ticket Médio", "Crescimento YoY (%)", "Classe"] + extra
+                             if c in res['completo'].columns])
                 buf = io.BytesIO()
                 with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
                     res['completo'][cols_exp].to_excel(writer, sheet_name='Encarte Completo', index=False)
                     res['resumo'].to_excel(writer, sheet_name='Resumo', index=False)
-                    res['capa'][cols_exp].to_excel(writer, sheet_name='Capa', index=False)
+                    capa_exp = [c for c in cols_exp if c in res['capa'].columns]
+                    res['capa'][capa_exp].to_excel(writer, sheet_name='Capa', index=False)
                     if not res['paginas'].empty:
-                        seen_sheets = set()
                         for pag in res['paginas']['Página'].unique():
-                            df_p = res['paginas'][res['paginas']['Página'] == pag][cols_exp]
-                            safe = re.sub(r'[\\/*?:\[\]]', '', pag)[:31]
-                            if safe in seen_sheets:
-                                safe = safe[:28] + '_2'
-                            seen_sheets.add(safe)
-                            df_p.to_excel(writer, sheet_name=safe, index=False)
+                            safe = _re.sub(r'[\\/*?:\[\]]', '', str(pag))[:31]
+                            df_p = res['paginas'][res['paginas']['Página'] == pag]
+                            pag_exp = [c for c in cols_exp if c in df_p.columns]
+                            df_p[pag_exp].to_excel(writer, sheet_name=safe, index=False)
                 return buf.getvalue()
 
             st.download_button(
                 "⬇️ Exportar Sugestão de Encarte (Excel)",
-                data=gerar_excel_encarte(res_enc, None),
+                data=gerar_excel_encarte(res_enc),
                 file_name=f"encarte_{mes_enc}_{n_pags}pags.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )

@@ -114,11 +114,17 @@ def alertas_estoque(df, meses_cobertura=2.0):
     alerta = merged[merged["Meses de Cobertura"] < meses_cobertura].sort_values("Meses de Cobertura").reset_index(drop=True)
     return alerta[["Código","Produto","Saldo","Média Mensal (Un)","Meses de Cobertura","Status"]]
 
-def sugerir_encarte(df, mes_ref, anos_ref, n_paginas, organizar_por='Subcategoria', filtrar_sem_estoque=True):
-    PROD_CAPA = 9
-    PROD_PAG = 12
 
-    cols_req = ['Mês','Ano','Código','Produto','Categoria','Subcategoria','Venda','Quantidade']
+def sugerir_encarte(df, mes_ref, anos_ref, n_paginas, filtrar_sem_estoque=True, meta_mensal=None):
+    SUBCATS_CAPA = 9
+    CATS_POR_PAG = 2
+    SUBCATS_POR_CAT = 6
+
+    tem_dep = 'Departamento' in df.columns and df['Departamento'].notna().any()
+    grp = (['Departamento'] if tem_dep else []) + ['Categoria', 'Subcategoria']
+    nivel_pag = 'Departamento' if tem_dep else 'Categoria'
+
+    cols_req = ['Mês', 'Ano', 'Categoria', 'Subcategoria', 'Venda', 'Quantidade']
     if not all(c in df.columns for c in cols_req): return {}
 
     mask = df['Mês'].astype(str) == mes_ref
@@ -126,86 +132,112 @@ def sugerir_encarte(df, mes_ref, anos_ref, n_paginas, organizar_por='Subcategori
     df_ref = df[mask].copy()
     if df_ref.empty: return {}
 
-    agg = {'Venda':'sum','Quantidade':'sum'}
+    agg = {'Venda': 'sum', 'Quantidade': 'sum'}
     if 'Saldo' in df.columns: agg['Saldo'] = 'max'
 
-    df_prod = (
-        df_ref.groupby(['Código','Produto','Categoria','Subcategoria'], as_index=False)
+    df_sub = (
+        df_ref.groupby(grp, as_index=False, observed=True)
         .agg(agg)
         .sort_values('Venda', ascending=False)
         .reset_index(drop=True)
     )
-    df_prod['Preço Médio'] = (df_prod['Venda'] / df_prod['Quantidade'].replace(0, np.nan)).fillna(0)
+    df_sub['Ticket Médio'] = (df_sub['Venda'] / df_sub['Quantidade'].replace(0, np.nan)).fillna(0)
 
-    if filtrar_sem_estoque and 'Saldo' in df_prod.columns:
-        df_prod = df_prod[df_prod['Saldo'] > 0].reset_index(drop=True)
-    if df_prod.empty: return {}
+    if filtrar_sem_estoque and 'Saldo' in df_sub.columns:
+        df_sub = df_sub[df_sub['Saldo'] > 0].reset_index(drop=True)
+    if df_sub.empty: return {}
 
+    # Crescimento YoY
     anos_disp = sorted(df['Ano'].dropna().unique())
     if len(anos_disp) >= 2:
         ano_ref_num = max([int(a) for a in anos_ref]) if anos_ref else int(anos_disp[-1])
         df_ant = df[(df['Mês'].astype(str) == mes_ref) & (df['Ano'] == ano_ref_num - 1)]
         if not df_ant.empty:
-            v_ant = df_ant.groupby(['Código','Produto'])['Venda'].sum().reset_index().rename(columns={'Venda':'Venda_Ant'})
-            df_prod = df_prod.merge(v_ant, on=['Código','Produto'], how='left')
-            df_prod['Venda_Ant'] = df_prod['Venda_Ant'].fillna(0)
-            df_prod['Crescimento YoY (%)'] = (
-                (df_prod['Venda'] - df_prod['Venda_Ant']) /
-                df_prod['Venda_Ant'].replace(0, np.nan) * 100
+            v_ant = (df_ant.groupby(grp, observed=True)['Venda']
+                     .sum().reset_index().rename(columns={'Venda': 'Venda_Ant'}))
+            df_sub = df_sub.merge(v_ant, on=grp, how='left')
+            df_sub['Venda_Ant'] = df_sub['Venda_Ant'].fillna(0)
+            df_sub['Crescimento YoY (%)'] = (
+                (df_sub['Venda'] - df_sub['Venda_Ant']) /
+                df_sub['Venda_Ant'].replace(0, np.nan) * 100
             ).fillna(0).clip(-100, 500)
         else:
-            df_prod['Crescimento YoY (%)'] = 0.0
+            df_sub['Crescimento YoY (%)'] = 0.0
     else:
-        df_prod['Crescimento YoY (%)'] = 0.0
+        df_sub['Crescimento YoY (%)'] = 0.0
 
-    v_max = df_prod['Venda'].max()
-    c_max = df_prod['Crescimento YoY (%)'].clip(lower=0).max()
-    df_prod['Score'] = (
-        0.70 * (df_prod['Venda'] / v_max if v_max > 0 else 0) +
-        0.30 * (df_prod['Crescimento YoY (%)'].clip(lower=0) / c_max if c_max > 0 else 0)
+    # Score composto: 70% volume + 30% crescimento
+    v_max = df_sub['Venda'].max()
+    c_max = df_sub['Crescimento YoY (%)'].clip(lower=0).max()
+    df_sub['Score'] = (
+        0.70 * (df_sub['Venda'] / v_max if v_max > 0 else 0) +
+        0.30 * (df_sub['Crescimento YoY (%)'].clip(lower=0) / c_max if c_max > 0 else 0)
     )
 
-    total_v = df_prod['Venda'].sum()
-    df_prod['% Repres.'] = df_prod['Venda'] / total_v if total_v > 0 else 0
-    df_prod['% Acum.'] = df_prod['% Repres.'].cumsum()
-    df_prod['Classe'] = df_prod['% Acum.'].apply(lambda x: 'A' if x<=0.80 else ('B' if x<=0.95 else 'C'))
-    df_prod = df_prod.sort_values('Score', ascending=False).reset_index(drop=True)
+    # Classe ABC
+    total_v = df_sub['Venda'].sum()
+    df_sub['% Repres.'] = df_sub['Venda'] / total_v if total_v > 0 else 0
+    df_sub['% Acum.'] = df_sub['% Repres.'].cumsum()
+    df_sub['Classe'] = df_sub['% Acum.'].apply(lambda x: 'A' if x <= 0.80 else ('B' if x <= 0.95 else 'C'))
 
-    # Capa: produtos mais importantes com diversidade de categorias (mista)
+    # Cálculo sobre meta
+    if meta_mensal and meta_mensal > 0:
+        df_sub['Meta Est. (R$)'] = (df_sub['% Repres.'] * meta_mensal).round(2)
+        df_sub['Qtd. Necessária'] = (
+            df_sub['Meta Est. (R$)'] / df_sub['Ticket Médio'].replace(0, np.nan)
+        ).fillna(0).apply(math.ceil)
+        if 'Saldo' in df_sub.columns:
+            df_sub['Estoque OK?'] = df_sub.apply(
+                lambda r: '🟢 OK' if r['Saldo'] >= r['Qtd. Necessária']
+                else ('🟡 Parcial' if r['Saldo'] >= r['Qtd. Necessária'] * 0.5 else '🔴 Crítico'), axis=1
+            )
+
+    df_sub = df_sub.sort_values('Score', ascending=False).reset_index(drop=True)
+
+    # Capa: 9 melhores subcategorias com diversidade de categorias
     capa_idx = []
-    for cat in df_prod['Categoria'].unique():
-        if len(capa_idx) >= PROD_CAPA: break
-        idx = df_prod[~df_prod.index.isin(capa_idx) & (df_prod['Categoria'] == cat)].index
+    for cat in df_sub['Categoria'].unique():
+        if len(capa_idx) >= SUBCATS_CAPA: break
+        idx = df_sub[~df_sub.index.isin(capa_idx) & (df_sub['Categoria'] == cat)].index
         if len(idx) > 0: capa_idx.append(idx[0])
-    for i in df_prod.index:
-        if len(capa_idx) >= PROD_CAPA: break
+    for i in df_sub.index:
+        if len(capa_idx) >= SUBCATS_CAPA: break
         if i not in capa_idx: capa_idx.append(i)
 
-    capa = df_prod.loc[capa_idx].copy().reset_index(drop=True)
-    capa['Posição'] = range(1, len(capa)+1)
+    capa = df_sub.loc[capa_idx].copy().reset_index(drop=True)
+    capa['Posição'] = range(1, len(capa) + 1)
     capa['Página'] = 'Capa'
 
-    # Páginas internas: uma página por subcategoria
-    restante = df_prod.loc[[i for i in df_prod.index if i not in capa_idx]].copy()
-    subcat_rank = (
-        restante.groupby('Subcategoria')['Venda']
-        .sum().sort_values(ascending=False).index.tolist()
-    )
-
-    max_pags_internas = n_paginas - 1
+    # Páginas internas: 1 departamento/página → 2 categorias → 6 subcategorias cada
+    restante = df_sub.loc[[i for i in df_sub.index if i not in capa_idx]].copy()
     rows = []
     pags_usadas = 0
 
-    for subcat in subcat_rank:
-        if pags_usadas >= max_pags_internas: break
-        prods_subcat = restante[restante['Subcategoria'] == subcat].sort_values('Score', ascending=False)
-        for chunk_start in range(0, len(prods_subcat), PROD_PAG):
-            if pags_usadas >= max_pags_internas: break
-            chunk = prods_subcat.iloc[chunk_start:chunk_start + PROD_PAG]
-            page_label = subcat if chunk_start == 0 else f"{subcat} (cont.)"
-            for pos, (_, row) in enumerate(chunk.iterrows()):
+    if tem_dep:
+        dep_rank = (restante.groupby('Departamento', observed=True)['Venda']
+                    .sum().sort_values(ascending=False).index.tolist())
+        for dep in dep_rank:
+            if pags_usadas >= n_paginas - 1: break
+            df_dep = restante[restante['Departamento'] == dep]
+            cat_rank = (df_dep.groupby('Categoria', observed=True)['Venda']
+                        .sum().sort_values(ascending=False).head(CATS_POR_PAG).index.tolist())
+            for cat_i, cat in enumerate(cat_rank):
+                df_cat = df_dep[df_dep['Categoria'] == cat].sort_values('Score', ascending=False).head(SUBCATS_POR_CAT)
+                for pos, (_, row) in enumerate(df_cat.iterrows()):
+                    r = row.copy()
+                    r['Página'] = dep
+                    r['Posição'] = cat_i * SUBCATS_POR_CAT + pos + 1
+                    rows.append(r)
+            pags_usadas += 1
+    else:
+        cat_rank = (restante.groupby('Categoria', observed=True)['Venda']
+                    .sum().sort_values(ascending=False).index.tolist())
+        for cat in cat_rank:
+            if pags_usadas >= n_paginas - 1: break
+            df_cat = restante[restante['Categoria'] == cat].sort_values('Score', ascending=False).head(CATS_POR_PAG * SUBCATS_POR_CAT)
+            for pos, (_, row) in enumerate(df_cat.iterrows()):
                 r = row.copy()
-                r['Página'] = page_label
+                r['Página'] = cat
                 r['Posição'] = pos + 1
                 rows.append(r)
             pags_usadas += 1
@@ -213,21 +245,17 @@ def sugerir_encarte(df, mes_ref, anos_ref, n_paginas, organizar_por='Subcategori
     df_pags = pd.DataFrame(rows).reset_index(drop=True) if rows else pd.DataFrame()
     df_completo = pd.concat([capa, df_pags], ignore_index=True)
 
-    capa_resumo = pd.DataFrame([{
-        'Página': 'Capa', 'Subcategoria': 'Mista',
-        'Produtos': len(capa), 'Venda_Ref': capa['Venda'].sum()
-    }])
+    capa_res = pd.DataFrame([{'Página': 'Capa', 'Itens': len(capa), 'Venda_Ref': capa['Venda'].sum()}])
     if not df_pags.empty:
-        pags_resumo = (
-            df_pags.groupby('Página', sort=False)
-            .agg(Produtos=('Produto','count'), Venda_Ref=('Venda','sum'))
-            .reset_index()
-        )
-        subcat_por_pag = df_pags.groupby('Página', sort=False)['Subcategoria'].first().reset_index()
-        pags_resumo = pags_resumo.merge(subcat_por_pag, on='Página')
-        resumo = pd.concat([capa_resumo, pags_resumo], ignore_index=True)
+        pags_res = (df_pags.groupby('Página', sort=False)
+                    .agg(Itens=('Subcategoria', 'count'), Venda_Ref=('Venda', 'sum'))
+                    .reset_index())
+        resumo = pd.concat([capa_res, pags_res], ignore_index=True)
     else:
-        resumo = capa_resumo
+        resumo = capa_res
 
-    return {'completo': df_completo, 'capa': capa, 'paginas': df_pags,
-            'resumo': resumo, 'total_produtos': len(df_completo)}
+    return {
+        'completo': df_completo, 'capa': capa, 'paginas': df_pags,
+        'resumo': resumo, 'total_itens': len(df_completo),
+        'tem_dep': tem_dep, 'nivel_pag': nivel_pag
+    }
