@@ -186,6 +186,10 @@ def _build_pagina(pag_name, df_pag, tem_dep, usable_w):
     col_widths = ([dep_w] if tem_dep else []) + [cat_w, sub_w, prod_w, prod_w, prod_w]
 
     cats = list(df_pag['Categoria'].unique()) if 'Categoria' in df_pag.columns else [pag_name]
+
+    # Pool global de produtos da página para preencher slots vazios
+    used_idx = set()
+
     linhas = []
     spans = []
     r = 0
@@ -197,10 +201,27 @@ def _build_pagina(pag_name, df_pag, tem_dep, usable_w):
 
         for si, subcat in enumerate(subcats):
             df_sub = (df_cat[df_cat['Subcategoria'] == subcat]
-                      if 'Subcategoria' in df_cat.columns else df_cat).reset_index(drop=True)
-            prods = [df_sub.iloc[i] if i < len(df_sub) else None for i in range(3)]
-            cards = [_card(p, prod_w, has_extra) if p is not None else _card_vazio(prod_w)
-                     for p in prods]
+                      if 'Subcategoria' in df_cat.columns else df_cat)
+
+            # Pega produtos desta subcategoria
+            prods = []
+            for idx, row in df_sub.sort_values('Score', ascending=False).iterrows():
+                if len(prods) >= 3: break
+                if idx not in used_idx:
+                    prods.append(row)
+                    used_idx.add(idx)
+
+            # Preenche slots restantes com próximos melhores da página
+            if len(prods) < 3:
+                restante = df_pag[~df_pag.index.isin(used_idx)].sort_values('Score', ascending=False)
+                for idx, row in restante.iterrows():
+                    if len(prods) >= 3: break
+                    prods.append(row)
+                    used_idx.add(idx)
+
+            cards = [_card(p, prod_w, has_extra) for p in prods]
+            while len(cards) < 3:
+                cards.append(_card_vazio(prod_w))
 
             cat_cell = RotLabel(cat, C_AZUL_MED, C_BRANCO, 7) if si == 0 else ''
             sub_cell = RotLabel(subcat, C_AZUL_CLR, C_AZUL, 6.5)
