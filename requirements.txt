@@ -6,3 +6,4 @@ scikit-learn>=1.4.0
 numpy>=1.26.0
 xlsxwriter>=3.2.0
 gdown>=4.7.0
+reportlab>=4.0.0

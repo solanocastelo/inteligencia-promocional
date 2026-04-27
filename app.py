@@ -6,6 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from pdf_encarte import gerar_pdf_encarte
 from analytics import alertas_estoque, calcular_abc, prever_proximos_meses, simular_metas, sugerir_encarte
 from charts import LAYOUT_BASE, area_temporal, barras_horizontais, gauge_meta, pareto_abc, yoy_multilinhas
 from loader import MESES_ORDEM, carregar_pasta, carregar_uploads, carregar_google_drive
@@ -450,4 +451,10 @@ with tab_encarte:
                 data=gerar_excel_encarte(res_enc),
                 file_name=f"encarte_{mes_enc}_{n_pags}pags.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            st.download_button(
+                "📄 Exportar PDF do Encarte",
+                data=gerar_pdf_encarte(res_enc, mes_enc),
+                file_name=f"encarte_{mes_enc}_{n_pags}pags.pdf",
+                mime="application/pdf"
             )
