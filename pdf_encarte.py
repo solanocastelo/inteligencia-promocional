@@ -172,7 +172,6 @@ def _build_capa(df_capa, mes_ref, usable_w):
     story.append(grid)
     return story
 
-
 def _build_pagina(pag_name, df_pag, tem_dep, usable_w):
     story = []
     story.append(_para(f"ENCARTE  ·  {pag_name.upper()}", size=10, bold=True, color=C_AZUL))
@@ -186,10 +185,7 @@ def _build_pagina(pag_name, df_pag, tem_dep, usable_w):
     col_widths = ([dep_w] if tem_dep else []) + [cat_w, sub_w, prod_w, prod_w, prod_w]
 
     cats = list(df_pag['Categoria'].unique()) if 'Categoria' in df_pag.columns else [pag_name]
-
-    # Pool global de produtos da página para preencher slots vazios
     used_idx = set()
-
     linhas = []
     spans = []
     r = 0
@@ -198,8 +194,9 @@ def _build_pagina(pag_name, df_pag, tem_dep, usable_w):
         df_cat = df_pag[df_pag['Categoria'] == cat] if 'Categoria' in df_pag.columns else df_pag
         subcats = list(df_cat['Subcategoria'].unique()) if 'Subcategoria' in df_cat.columns else ['']
         cat_start = r
+        cat_rows_added = 0
 
-        for si, subcat in enumerate(subcats):
+        for subcat in subcats:
             df_sub = (df_cat[df_cat['Subcategoria'] == subcat]
                       if 'Subcategoria' in df_cat.columns else df_cat)
 
@@ -211,7 +208,7 @@ def _build_pagina(pag_name, df_pag, tem_dep, usable_w):
                     prods.append(row)
                     used_idx.add(idx)
 
-            # Preenche slots restantes com próximos melhores da página
+            # Preenche com próximos do pool geral
             if len(prods) < 3:
                 restante = df_pag[~df_pag.index.isin(used_idx)].sort_values('Score', ascending=False)
                 for idx, row in restante.iterrows():
@@ -219,11 +216,16 @@ def _build_pagina(pag_name, df_pag, tem_dep, usable_w):
                     prods.append(row)
                     used_idx.add(idx)
 
+            # Sem produtos disponíveis → pula esta linha completamente
+            if not prods:
+                continue
+
             cards = [_card(p, prod_w, has_extra) for p in prods]
             while len(cards) < 3:
                 cards.append(_card_vazio(prod_w))
 
-            cat_cell = RotLabel(cat, C_AZUL_MED, C_BRANCO, 7) if si == 0 else ''
+            # Label da categoria só na primeira linha adicionada desta categoria
+            cat_cell = RotLabel(cat, C_AZUL_MED, C_BRANCO, 7) if cat_rows_added == 0 else ''
             sub_cell = RotLabel(subcat, C_AZUL_CLR, C_AZUL, 6.5)
 
             if tem_dep:
@@ -231,11 +233,17 @@ def _build_pagina(pag_name, df_pag, tem_dep, usable_w):
                 linhas.append([dep_cell, cat_cell, sub_cell] + cards)
             else:
                 linhas.append([cat_cell, sub_cell] + cards)
-            r += 1
 
+            r += 1
+            cat_rows_added += 1
+
+        # Span da categoria apenas se tiver mais de 1 linha
         cat_col = 1 if tem_dep else 0
-        if len(subcats) > 1:
-            spans.append(('SPAN', (cat_col, cat_start), (cat_col, r - 1)))
+        if cat_rows_added > 1:
+            spans.append(('SPAN', (cat_col, cat_start), (cat_col, cat_start + cat_rows_added - 1)))
+
+    if not linhas:
+        return story
 
     if tem_dep and r > 1:
         spans.append(('SPAN', (0, 0), (0, r - 1)))
@@ -255,7 +263,6 @@ def _build_pagina(pag_name, df_pag, tem_dep, usable_w):
     ] + spans))
     story.append(tbl)
     return story
-
 
 def gerar_pdf_encarte(res_enc, mes_ref):
     """Gera o PDF completo do encarte. Retorna bytes."""
